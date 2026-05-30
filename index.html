@@ -469,9 +469,6 @@ let state = {
   scriptUrl: '',
 };
 
-let filterMonth = '';
-let filterMonthFin = '';
-let filterMonthChart = '';
 let editingId = null;
 let currentType = 'gasto';
 let currentFreq = 'mensual';
@@ -481,10 +478,6 @@ let selectedMainColor = COLORS[0];
 
 function today() { return new Date().toISOString().slice(0,10); }
 function ym(dateStr) { return dateStr ? dateStr.slice(0,7) : ''; }
-function currentMonth() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
-}
 function fmtDate(d) {
   if (!d) return '';
   const [y,m,day] = d.split('-');
@@ -494,15 +487,97 @@ function fmtMoney(n, cur='ARS') {
   if (cur==='USD') return 'U$S '+Number(n).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2});
   return '$'+Math.round(Number(n)).toLocaleString('es-AR');
 }
-function monthLabel(ym) {
-  if (!ym) return '—';
-  const [y,m] = ym.split('-').map(Number);
-  return `${MONTHS[m-1]} ${y}`;
+
+// ─── PERÍODO BASADO EN SUELDO ─────────────────────────────────────────────────
+// Devuelve array de períodos ordenados [{label, from, to}]
+// cada período va desde fecha de un sueldo hasta el día antes del siguiente
+function getSalaryDates() {
+  const sueldos = state.transactions
+    .filter(t => t.tipo==='ingreso' && t.subcategoria && t.subcategoria.toLowerCase().includes('sueldo'))
+    .map(t => t.fecha)
+    .sort();
+  return sueldos;
+}
+
+function getPeriods() {
+  const dates = getSalaryDates();
+  if (!dates.length) return null; // sin sueldo registrado → modo calendario
+  const periods = [];
+  for (let i = 0; i < dates.length; i++) {
+    const from = dates[i];
+    // to = día antes del siguiente sueldo, o hoy si es el último
+    let to;
+    if (i < dates.length - 1) {
+      const nextDate = new Date(dates[i+1]);
+      nextDate.setDate(nextDate.getDate() - 1);
+      to = nextDate.toISOString().slice(0,10);
+    } else {
+      to = today();
+    }
+    // nombre del período = mes del primer día real del período siguiente al sueldo
+    // ej: sueldo 29/05 → período se llama "junio 2026"
+    const fromDate = new Date(from);
+    fromDate.setDate(fromDate.getDate() + 1); // el día siguiente al sueldo
+    // pero si el sueldo cayó en el mismo mes que el período anterior, usamos el mes siguiente
+    const labelDate = new Date(from);
+    labelDate.setDate(labelDate.getDate() + 3); // unos días después para capturar el mes correcto
+    const label = `${MONTHS[labelDate.getMonth()]} ${labelDate.getFullYear()}`;
+    periods.push({ label, from, to });
+  }
+  return periods;
+}
+
+function currentPeriodIdx() {
+  const periods = getPeriods();
+  if (!periods) return -1;
+  const t = today();
+  for (let i = periods.length - 1; i >= 0; i--) {
+    if (t >= periods[i].from) return i;
+  }
+  return 0;
+}
+
+// filterPeriodIdx: índice del período actual en la lista de períodos
+// Si no hay sueldos, usamos YYYY-MM como antes
+let filterPeriodIdx = -1;
+let filterPeriodIdxFin = -1;
+let filterPeriodIdxChart = -1;
+
+// Helpers: obtener transacciones de un período
+function txnsInPeriod(idx) {
+  const periods = getPeriods();
+  if (!periods || idx < 0) {
+    // fallback calendario
+    const cm = filterMonthFallback;
+    return state.transactions.filter(t => ym(t.fecha) === cm);
+  }
+  const p = periods[idx];
+  if (!p) return [];
+  return state.transactions.filter(t => t.fecha >= p.from && t.fecha <= p.to);
+}
+
+function periodLabel(idx) {
+  const periods = getPeriods();
+  if (!periods || idx < 0) return monthLabel(filterMonthFallback);
+  const p = periods[idx];
+  return p ? p.label : '—';
+}
+
+// Fallback sin sueldo
+let filterMonthFallback = '';
+function currentMonthStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
 }
 function addMonths(ym, n) {
   const [y,m] = ym.split('-').map(Number);
   const d = new Date(y, m-1+n, 1);
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+}
+function monthLabel(ym) {
+  if (!ym) return '—';
+  const [y,m] = ym.split('-').map(Number);
+  return `${MONTHS[m-1]} ${y}`;
 }
 
 function loadState() {
@@ -510,17 +585,31 @@ function loadState() {
     const s = localStorage.getItem('gastosState2');
     if (s) Object.assign(state, JSON.parse(s));
   } catch(e) {}
-  filterMonth = currentMonth();
-  filterMonthFin = currentMonth();
-  filterMonthChart = currentMonth();
+  filterMonthFallback = currentMonthStr();
+  refreshPeriodIdxs();
   document.getElementById('scriptUrl').value = state.scriptUrl || '';
 }
+
+function refreshPeriodIdxs() {
+  const periods = getPeriods();
+  if (periods && periods.length) {
+    filterPeriodIdx = currentPeriodIdx();
+    filterPeriodIdxFin = filterPeriodIdx;
+    filterPeriodIdxChart = filterPeriodIdx;
+  } else {
+    filterPeriodIdx = -1;
+    filterPeriodIdxFin = -1;
+    filterPeriodIdxChart = -1;
+    filterMonthFallback = currentMonthStr();
+  }
+}
+
 function saveState() { localStorage.setItem('gastosState2', JSON.stringify(state)); }
 
 // ─── NAV ──────────────────────────────────────────────────────────────────────
 function updateNavMonth() {
-  const d = new Date();
-  document.getElementById('navMonth').textContent = `${MONTHS[d.getMonth()].slice(0,3)} ${d.getFullYear()}`;
+  const label = periodLabel(filterPeriodIdx);
+  document.getElementById('navMonth').textContent = label;
 }
 
 function showView(v) {
@@ -537,28 +626,50 @@ function showView(v) {
 }
 
 // ─── MONTH NAV ────────────────────────────────────────────────────────────────
-function setMonthNav(id, labelId, nextBtnId, val) {
-  document.getElementById(labelId).textContent = monthLabel(val);
+function setMonthNav(labelId, nextBtnId, idx) {
+  document.getElementById(labelId).textContent = periodLabel(idx);
+  const periods = getPeriods();
+  const isLast = periods ? idx >= periods.length - 1 : (filterMonthFallback >= currentMonthStr());
   const nextBtn = document.getElementById(nextBtnId);
-  const isCurrent = val >= currentMonth();
-  nextBtn.style.opacity = isCurrent ? '0.3' : '1';
-  nextBtn.style.pointerEvents = isCurrent ? 'none' : 'auto';
+  nextBtn.style.opacity = isLast ? '0.3' : '1';
+  nextBtn.style.pointerEvents = isLast ? 'none' : 'auto';
 }
-function changeMonth(dir) { filterMonth = addMonths(filterMonth, dir); renderHome(); }
-function changeMonthFin(dir) { filterMonthFin = addMonths(filterMonthFin, dir); renderFinanzas(); }
-function changeMonthChart(dir) { filterMonthChart = addMonths(filterMonthChart, dir); renderCharts(); }
+
+function changeMonth(dir) {
+  const periods = getPeriods();
+  if (periods) {
+    filterPeriodIdx = Math.max(0, Math.min(periods.length-1, filterPeriodIdx + dir));
+  } else {
+    filterMonthFallback = addMonths(filterMonthFallback, dir);
+  }
+  updateNavMonth();
+  renderHome();
+}
+function changeMonthFin(dir) {
+  const periods = getPeriods();
+  if (periods) filterPeriodIdxFin = Math.max(0, Math.min(periods.length-1, filterPeriodIdxFin + dir));
+  else filterMonthFallback = addMonths(filterMonthFallback, dir);
+  renderFinanzas();
+}
+function changeMonthChart(dir) {
+  const periods = getPeriods();
+  if (periods) filterPeriodIdxChart = Math.max(0, Math.min(periods.length-1, filterPeriodIdxChart + dir));
+  else filterMonthFallback = addMonths(filterMonthFallback, dir);
+  renderCharts();
+}
 
 // ─── HOME — GASTOS ────────────────────────────────────────────────────────────
 function renderHome() {
-  setMonthNav('inicio','filterMonthLabel','btnNextMonth', filterMonth);
-  const txns = state.transactions.filter(t => t.tipo==='gasto' && ym(t.fecha)===filterMonth);
+  setMonthNav('filterMonthLabel','btnNextMonth', filterPeriodIdx);
+  updateNavMonth();
+  const txns = txnsInPeriod(filterPeriodIdx).filter(t => t.tipo==='gasto');
   const total = txns.reduce((a,t)=>a+Number(t.monto),0);
   document.getElementById('sumExpense').textContent = fmtMoney(total);
   document.getElementById('subExpense').textContent = `${txns.length} movimiento${txns.length!==1?'s':''}`;
   const sorted = [...txns].sort((a,b)=>b.timestamp-a.timestamp);
   const list = document.getElementById('txnList');
   if (!sorted.length) {
-    list.innerHTML = `<div class="empty-state"><div style="font-size:32px">○</div><p>Sin gastos en ${monthLabel(filterMonth)}.</p></div>`;
+    list.innerHTML = `<div class="empty-state"><div style="font-size:32px">○</div><p>Sin gastos en ${periodLabel(filterPeriodIdx)}.</p></div>`;
     return;
   }
   list.innerHTML = sorted.map(t => {
@@ -581,8 +692,9 @@ function renderHome() {
 
 // ─── PENDIENTES ───────────────────────────────────────────────────────────────
 function renderPendientes() {
-  const cm = currentMonth();
-  const key = `pend_${cm}`;
+  const periods = getPeriods();
+  const curIdx = currentPeriodIdx();
+  const key = periods && periods[curIdx] ? `pend_${periods[curIdx].from}` : `pend_${currentMonthStr()}`;
   const checked = state.pendingChecked[key] || {};
   // gastos fijos: los marcados como fijo=true
   const fijos = state.transactions.filter(t=>t.tipo==='gasto'&&t.fijo);
@@ -626,9 +738,8 @@ function togglePending(txnId, monthKey) {
 
 // ─── FINANZAS ─────────────────────────────────────────────────────────────────
 function renderFinanzas() {
-  setMonthNav('finanzas','finMonthLabel','btnNextMonthFin', filterMonthFin);
-  const fm = filterMonthFin;
-  const txns = state.transactions.filter(t=>ym(t.fecha)===fm);
+  setMonthNav('finMonthLabel','btnNextMonthFin', filterPeriodIdxFin);
+  const txns = txnsInPeriod(filterPeriodIdxFin);
   const incomes = txns.filter(t=>t.tipo==='ingreso');
   const expenses = txns.filter(t=>t.tipo==='gasto');
   const incTotal = incomes.reduce((a,t)=>a+Number(t.monto),0);
@@ -673,9 +784,9 @@ function showChart(type) {
 }
 
 function renderCharts() {
-  setMonthNav('graficos','chartMonthLabel','btnNextMonthChart', filterMonthChart);
-  const cm = filterMonthChart;
-  const gastos = state.transactions.filter(t=>t.tipo==='gasto'&&ym(t.fecha)===cm);
+  setMonthNav('chartMonthLabel','btnNextMonthChart', filterPeriodIdxChart);
+  const cm = filterPeriodIdxChart; // kept as idx
+  const gastos = txnsInPeriod(filterPeriodIdxChart).filter(t=>t.tipo==='gasto');
 
   if (currentChartType==='pie') {
     const bycat = {};
@@ -717,51 +828,54 @@ function renderCharts() {
   }
 
   if (currentChartType==='evol') {
-    // últimos 4 meses incluyendo el seleccionado
-    const months4 = [addMonths(cm,-3),addMonths(cm,-2),addMonths(cm,-1),cm];
-    // agrupar gastos fijos por descripcion
-    const fijoTxns = state.transactions.filter(t=>t.tipo==='gasto'&&t.fijo);
-    const seen={};
-    fijoTxns.forEach(t=>{
-      const k=(t.descripcion+t.subcategoria).toLowerCase();
-      if(!seen[k]) seen[k]={name:t.descripcion,sub:t.subcategoria||'',months:{}};
-    });
-    // sumar por mes
-    fijoTxns.forEach(t=>{
-      const k=(t.descripcion+t.subcategoria).toLowerCase();
-      const m=ym(t.fecha);
-      if(seen[k]){
-        seen[k].months[m]=(seen[k].months[m]||0)+Number(t.monto);
-      }
-    });
+    const periods = getPeriods();
+    // últimos 4 períodos hasta el seleccionado
+    const endIdx = filterPeriodIdxChart;
+    const idxs = [endIdx-3, endIdx-2, endIdx-1, endIdx].filter(i=>i>=0);
     const evolEl = document.getElementById('evolList');
-    const items = Object.values(seen).filter(x=>Object.keys(x.months).length>0);
+    const fijoTxns = state.transactions.filter(t=>t.tipo==='gasto'&&t.fijo);
+    const seen = {};
+    fijoTxns.forEach(t=>{
+      const k=(t.descripcion+(t.subcategoria||'')).toLowerCase();
+      if(!seen[k]) seen[k]={name:t.descripcion,sub:t.subcategoria||'',byPeriod:{}};
+    });
+    fijoTxns.forEach(t=>{
+      const k=(t.descripcion+(t.subcategoria||'')).toLowerCase();
+      if(!seen[k]) return;
+      // find which period this txn belongs to
+      let pidx = -1;
+      if (periods) {
+        for (let i=0;i<periods.length;i++) {
+          if (t.fecha >= periods[i].from && t.fecha <= periods[i].to) { pidx=i; break; }
+        }
+      } else { pidx = 0; }
+      seen[k].byPeriod[pidx] = (seen[k].byPeriod[pidx]||0)+Number(t.monto);
+    });
+    const items = Object.values(seen).filter(x=>Object.keys(x.byPeriod).length>0);
     if (!items.length) {
       evolEl.innerHTML = `<div style="font-size:13px;color:var(--text3);text-align:center;padding:20px">Marcá gastos como fijo (★) para ver su evolución.</div>`;
     } else {
       evolEl.innerHTML = items.map(item=>{
-        const vals = months4.map(m=>item.months[m]||null);
-        const lastVal = vals[3], prevVal = vals[2];
-        let arrow='', pctStr='';
+        const vals = idxs.map(i=>item.byPeriod[i]||null);
+        const lastVal = vals[vals.length-1], prevVal = vals[vals.length-2];
+        let pctStr='';
         if (lastVal!==null && prevVal!==null && prevVal>0) {
-          const pct = Math.round((lastVal-prevVal)/prevVal*100);
-          arrow = pct>5?'↑':pct<-5?'↓':'→';
-          const cl = pct>5?'compare-arrow-up':pct<-5?'compare-arrow-down':'compare-flat';
-          pctStr = `<span class="${cl}" style="font-size:12px">${arrow} ${Math.abs(pct)}%</span>`;
+          const pct=Math.round((lastVal-prevVal)/prevVal*100);
+          const cl=pct>5?'compare-arrow-up':pct<-5?'compare-arrow-down':'compare-flat';
+          const arrow=pct>5?'↑':pct<-5?'↓':'→';
+          pctStr=`<span class="${cl}" style="font-size:12px">${arrow} ${Math.abs(pct)}%</span>`;
         }
-        const barsHtml = months4.map((m,i)=>{
-          const v = vals[i];
+        const barsHtml = idxs.map((pidx,i)=>{
+          const v=vals[i];
+          const lbl = periods && periods[pidx] ? periods[pidx].label.split(' ')[0].slice(0,3) : `P${pidx+1}`;
           return `<div style="text-align:center;flex:1">
-            <div style="font-size:9px;color:var(--text3);margin-bottom:4px">${MONTHS[parseInt(m.split('-')[1])-1].slice(0,3)}</div>
+            <div style="font-size:9px;color:var(--text3);margin-bottom:4px">${lbl}</div>
             <div style="font-family:var(--serif);font-size:11px;color:${v?'var(--text)':'var(--text3)'}">${v?'$'+Math.round(v).toLocaleString('es-AR'):'—'}</div>
           </div>`;
         }).join('');
         return `<div style="background:var(--bg2);border-radius:var(--radius-sm);padding:12px;margin-bottom:8px">
           <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-            <div>
-              <div style="font-size:13px">${item.name}</div>
-              <div style="font-size:10px;color:var(--text3)">${item.sub}</div>
-            </div>
+            <div><div style="font-size:13px">${item.name}</div><div style="font-size:10px;color:var(--text3)">${item.sub}</div></div>
             ${pctStr}
           </div>
           <div style="display:flex;gap:4px">${barsHtml}</div>
@@ -971,12 +1085,12 @@ function saveTransaction(){
   };
   if(editingId) {
     state.transactions=state.transactions.map(x=>x.id===editingId?txn:x);
-    saveState(); closeModal(); closeDetail();
+    saveState(); refreshPeriodIdxs(); closeModal(); closeDetail();
     renderHome(); showToast('Actualizado ✓','success');
     syncTxn(txn,'update');
   } else {
     state.transactions.unshift(txn);
-    saveState(); closeModal(); renderHome();
+    saveState(); refreshPeriodIdxs(); closeModal(); renderHome();
     showToast('Guardado ✓','success');
     syncTxn(txn,'add');
   }
@@ -1068,7 +1182,7 @@ async function syncAll(){
     timestamp:Number(r[idx('timestamp')])||0,
   })).filter(r=>r.id);
   state.transactions=loaded;
-  saveState(); renderHome();
+  saveState(); refreshPeriodIdxs(); renderHome();
   showToast(`${loaded.length} registros cargados`,'success');
 }
 async function testConnection(){
