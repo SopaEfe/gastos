@@ -477,51 +477,80 @@ let isStar = false;
 let selectedMainColor = COLORS[0];
 
 function today() { return new Date().toISOString().slice(0,10); }
-function ym(dateStr) { return dateStr ? dateStr.slice(0,7) : ''; }
-function fmtDate(d) {
+
+// Normaliza fecha a YYYY-MM-DD sin importar si viene como ISO completo o Date object
+function normalizeDate(d) {
   if (!d) return '';
-  const [y,m,day] = d.split('-');
+  if (typeof d === 'number') return new Date(d).toISOString().slice(0,10);
+  const s = String(d).trim();
+  // ISO completo: 2026-05-30T03:00:00.000Z
+  if (s.length > 10 && s.includes('T')) return s.slice(0,10);
+  // YYYY-MM-DD
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  // DD/MM/YYYY
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(s)) { const [dd,mm,yyyy]=s.split('/'); return `${yyyy}-${mm}-${dd}`; }
+  // intentar parsear
+  const parsed = new Date(s);
+  if (!isNaN(parsed)) return parsed.toISOString().slice(0,10);
+  return s.slice(0,10);
+}
+
+function ym(dateStr) {
+  const n = normalizeDate(dateStr);
+  return n ? n.slice(0,7) : '';
+}
+
+function fmtDate(d) {
+  const n = normalizeDate(d);
+  if (!n) return '';
+  const [y,m,day] = n.split('-');
   return `${day}/${m}/${y.slice(2)}`;
 }
+
 function fmtMoney(n, cur='ARS') {
   if (cur==='USD') return 'U$S '+Number(n).toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2});
   return '$'+Math.round(Number(n)).toLocaleString('es-AR');
 }
 
 // ─── PERÍODO BASADO EN SUELDO ─────────────────────────────────────────────────
-// Devuelve array de períodos ordenados [{label, from, to}]
-// cada período va desde fecha de un sueldo hasta el día antes del siguiente
 function getSalaryDates() {
-  const sueldos = state.transactions
+  return state.transactions
     .filter(t => t.tipo==='ingreso' && t.subcategoria && t.subcategoria.toLowerCase().includes('sueldo'))
-    .map(t => t.fecha)
+    .map(t => normalizeDate(t.fecha))
+    .filter(Boolean)
     .sort();
-  return sueldos;
 }
 
 function getPeriods() {
   const dates = getSalaryDates();
-  if (!dates.length) return null; // sin sueldo registrado → modo calendario
+  if (!dates.length) return null;
   const periods = [];
   for (let i = 0; i < dates.length; i++) {
     const from = dates[i];
-    // to = día antes del siguiente sueldo, o hoy si es el último
     let to;
     if (i < dates.length - 1) {
-      const nextDate = new Date(dates[i+1]);
+      const nextDate = new Date(dates[i+1] + 'T12:00:00');
       nextDate.setDate(nextDate.getDate() - 1);
       to = nextDate.toISOString().slice(0,10);
     } else {
       to = today();
     }
-    // nombre del período = mes del primer día real del período siguiente al sueldo
-    // ej: sueldo 29/05 → período se llama "junio 2026"
-    const fromDate = new Date(from);
-    fromDate.setDate(fromDate.getDate() + 1); // el día siguiente al sueldo
-    // pero si el sueldo cayó en el mismo mes que el período anterior, usamos el mes siguiente
-    const labelDate = new Date(from);
-    labelDate.setDate(labelDate.getDate() + 3); // unos días después para capturar el mes correcto
-    const label = `${MONTHS[labelDate.getMonth()]} ${labelDate.getFullYear()}`;
+    // El período se nombra con el mes SIGUIENTE a la fecha del sueldo
+    // ej: sueldo 29/05 → período = "junio YYYY"
+    const fromDate = new Date(from + 'T12:00:00');
+    // Avanzamos al mes siguiente si el sueldo cayó después del día 20
+    let labelMonth, labelYear;
+    if (fromDate.getDate() >= 20) {
+      // el sueldo es de fin de mes → el período es el mes siguiente
+      const next = new Date(fromDate.getFullYear(), fromDate.getMonth() + 1, 1);
+      labelMonth = next.getMonth();
+      labelYear = next.getFullYear();
+    } else {
+      // sueldo temprano en el mes → el período es el mismo mes
+      labelMonth = fromDate.getMonth();
+      labelYear = fromDate.getFullYear();
+    }
+    const label = `${MONTHS[labelMonth]} ${labelYear}`;
     periods.push({ label, from, to });
   }
   return periods;
@@ -1174,7 +1203,7 @@ async function syncAll(){
   if(!headers) return showToast('Sheet vacía','error');
   const idx=k=>headers.indexOf(k);
   const loaded=rest.map(r=>({
-    id:r[idx('id')],fecha:r[idx('fecha')],tipo:r[idx('tipo')],
+    id:r[idx('id')],fecha:normalizeDate(r[idx('fecha')]),tipo:r[idx('tipo')],
     descripcion:r[idx('descripcion')],categoria:r[idx('categoria')],
     subcategoria:r[idx('subcategoria')],frecuencia:r[idx('frecuencia')],
     monto:r[idx('monto')],moneda:r[idx('moneda')],nota:r[idx('nota')],
