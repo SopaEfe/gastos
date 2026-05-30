@@ -204,16 +204,18 @@ body{font-family:var(--mono);background:var(--bg);color:var(--text);min-height:1
 <div class="view" id="view-pendientes">
   <div style="margin-bottom:16px">
     <div class="sum-card">
-      <div class="sum-label">pendientes de pago</div>
-      <div class="sum-value" id="pendTotal" style="color:var(--accent)">$0</div>
-      <div class="sum-sub" id="pendSub">calculando…</div>
+      <div class="sum-label" id="pendPeriodLabel">período actual</div>
+      <div class="sum-value" id="pendCount" style="color:var(--accent)">0 pendientes</div>
+      <div class="sum-sub" id="pendSub"></div>
     </div>
   </div>
-  <div class="section-title">gastos fijos del mes</div>
+  <div class="section-title">sin pagar este período</div>
   <div id="pendList"></div>
+  <div style="margin-top:16px" class="section-title">ya pagados este período</div>
+  <div id="paidList"></div>
   <div style="margin-top:16px;font-size:11px;color:var(--text3);line-height:1.6">
-    ★ Los gastos marcados como "fijo mensual" aparecen acá.<br>
-    Tocá el círculo para marcar como pagado.
+    ★ Los gastos marcados como fijo aparecen acá automáticamente.<br>
+    Desaparecen de "sin pagar" cuando los cargás en Gastos.
   </div>
 </div>
 
@@ -728,46 +730,61 @@ function renderHome() {
 function renderPendientes() {
   const periods = getPeriods();
   const curIdx = currentPeriodIdx();
-  const key = periods && periods[curIdx] ? `pend_${periods[curIdx].from}` : `pend_${currentMonthStr()}`;
-  const checked = state.pendingChecked[key] || {};
-  // gastos fijos: los marcados como fijo=true
-  const fijos = state.transactions.filter(t=>t.tipo==='gasto'&&t.fijo);
-  // deduplicar por descripcion+subcategoria
-  const seen = {};
-  const unique = [];
-  fijos.forEach(t => {
-    const k = (t.descripcion+t.subcategoria).toLowerCase();
-    if (!seen[k]) { seen[k]=true; unique.push(t); }
-  });
-  const pendTotal = unique.filter(t=>!checked[t.id]).reduce((a,t)=>a+Number(t.monto),0);
-  const paidCount = Object.values(checked).filter(Boolean).length;
-  document.getElementById('pendTotal').textContent = fmtMoney(pendTotal);
-  document.getElementById('pendSub').textContent = `${paidCount}/${unique.length} pagados`;
-  const list = document.getElementById('pendList');
-  if (!unique.length) {
-    list.innerHTML = `<div class="empty-state"><div style="font-size:32px">★</div><p>Marcá gastos como fijo mensual (★)<br>al cargarlos para verlos acá.</p></div>`;
+  const curPeriod = periods && periods[curIdx] ? periods[curIdx] : null;
+  document.getElementById('pendPeriodLabel').textContent = curPeriod ? curPeriod.label : 'período actual';
+
+  // Todos los gastos fijos, deduplicados — el más reciente de cada combo descripcion+subcategoria
+  const fijoMap = {};
+  state.transactions
+    .filter(t => t.tipo==='gasto' && t.fijo)
+    .sort((a,b) => a.timestamp - b.timestamp)
+    .forEach(t => {
+      const k = (t.descripcion+'|'+(t.subcategoria||'')).toLowerCase();
+      fijoMap[k] = t;
+    });
+  const fijoUnicos = Object.values(fijoMap);
+
+  if (!fijoUnicos.length) {
+    document.getElementById('pendCount').textContent = '0 pendientes';
+    document.getElementById('pendSub').textContent = 'sin gastos fijos registrados';
+    document.getElementById('pendList').innerHTML = `<div class="empty-state"><div style="font-size:32px">★</div><p>Cuando cargues un gasto con ★<br>va a aparecer acá el próximo período.</p></div>`;
+    document.getElementById('paidList').innerHTML = '';
     return;
   }
-  list.innerHTML = unique.map(t => {
+
+  // Gastos ya registrados en el período actual
+  const txnsThisPeriod = curPeriod
+    ? state.transactions.filter(t => t.tipo==='gasto' && t.fecha >= curPeriod.from && t.fecha <= curPeriod.to)
+    : [];
+  const registradosKeys = new Set(
+    txnsThisPeriod.map(t => (t.descripcion+'|'+(t.subcategoria||'')).toLowerCase())
+  );
+
+  const pendientes = fijoUnicos.filter(t => !registradosKeys.has((t.descripcion+'|'+(t.subcategoria||'')).toLowerCase()));
+  const pagados    = fijoUnicos.filter(t =>  registradosKeys.has((t.descripcion+'|'+(t.subcategoria||'')).toLowerCase()));
+
+  document.getElementById('pendCount').textContent = `${pendientes.length} pendiente${pendientes.length!==1?'s':''}`;
+  document.getElementById('pendSub').textContent = `${pagados.length} ya pagado${pagados.length!==1?'s':''} este período`;
+
+  const renderItem = (t, done) => {
     const cat = state.categories.find(c=>c.id===t.categoria);
-    const isDone = !!checked[t.id];
-    return `<div class="pend-item ${isDone?'done':''}" onclick="togglePending('${t.id}','${cm}')">
-      <div class="pend-check ${isDone?'checked':''}">${isDone?'✓':''}</div>
+    return `<div class="pend-item ${done?'done':''}">
+      <div class="pend-check ${done?'checked':''}">${done?'✓':''}</div>
       <div class="pend-info">
         <div class="pend-name">${t.descripcion}</div>
         <div class="pend-meta">${cat?cat.name:''} · ${t.subcategoria||''}</div>
       </div>
-      <div class="pend-amount">${fmtMoney(t.monto,t.moneda)}</div>
+      <div class="pend-amount" style="color:${done?'var(--success)':'var(--text2)'}">último: ${fmtMoney(t.monto,t.moneda)}</div>
     </div>`;
-  }).join('');
-}
+  };
 
-function togglePending(txnId, monthKey) {
-  const key = `pend_${monthKey}`;
-  if (!state.pendingChecked[key]) state.pendingChecked[key] = {};
-  state.pendingChecked[key][txnId] = !state.pendingChecked[key][txnId];
-  saveState();
-  renderPendientes();
+  document.getElementById('pendList').innerHTML = pendientes.length
+    ? pendientes.map(t=>renderItem(t,false)).join('')
+    : `<div style="font-size:13px;color:var(--success);padding:12px;text-align:center">✓ Todo pagado este período</div>`;
+
+  document.getElementById('paidList').innerHTML = pagados.length
+    ? pagados.map(t=>renderItem(t,true)).join('')
+    : `<div style="font-size:13px;color:var(--text3);padding:12px">Ninguno registrado aún.</div>`;
 }
 
 // ─── FINANZAS ─────────────────────────────────────────────────────────────────
