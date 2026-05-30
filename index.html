@@ -614,6 +614,11 @@ function loadState() {
     const s = localStorage.getItem('gastosState2');
     if (s) Object.assign(state, JSON.parse(s));
   } catch(e) {}
+  // Migrar fechas rotas que vengan de Sheets con formato ISO completo
+  state.transactions = state.transactions.map(t => ({
+    ...t,
+    fecha: normalizeDate(t.fecha)
+  }));
   filterMonthFallback = currentMonthStr();
   refreshPeriodIdxs();
   document.getElementById('scriptUrl').value = state.scriptUrl || '';
