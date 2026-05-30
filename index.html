@@ -334,7 +334,14 @@ body {
     </div>
   </div>
 
-  <div class="section-title">últimos movimientos</div>
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+    <div class="section-title" style="margin-bottom:0;border-bottom:none;padding-bottom:0">movimientos</div>
+    <div style="display:flex;align-items:center;gap:6px">
+      <button onclick="changeMonth(-1)" style="background:none;border:1px solid var(--border2);color:var(--text2);border-radius:6px;width:28px;height:28px;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center">‹</button>
+      <span id="filterMonthLabel" style="font-size:11px;color:var(--text2);min-width:70px;text-align:center;letter-spacing:0.5px"></span>
+      <button onclick="changeMonth(1)" id="btnNextMonth" style="background:none;border:1px solid var(--border2);color:var(--text2);border-radius:6px;width:28px;height:28px;cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center">›</button>
+    </div>
+  </div>
   <div class="txn-list" id="txnList">
     <div class="loading-line"></div>
     <div class="loading-line"></div>
@@ -430,6 +437,25 @@ body {
     <div class="settings-section-title">código de apps script</div>
     <div style="background:var(--bg3);border-radius:var(--radius-sm);padding:12px;font-size:11px;color:var(--text2);line-height:1.7;font-family:var(--mono);white-space:pre-wrap;word-break:break-all" id="scriptCode"></div>
     <button class="btn-sm" style="margin-top:10px" onclick="copyScript()">Copiar código</button>
+  </div>
+</div>
+
+<!-- MODAL DETALLE -->
+<div class="modal-overlay" id="detailOverlay" onclick="closeDetailIfOverlay(event)">
+  <div class="modal" style="padding-bottom:32px">
+    <div class="modal-handle"></div>
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:6px">
+      <div>
+        <div class="modal-title" id="detailDesc" style="margin-bottom:4px"></div>
+        <div id="detailBadges" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+      </div>
+      <div id="detailAmount" style="font-family:var(--serif);font-size:26px;font-weight:300;flex-shrink:0;margin-left:12px;margin-top:4px"></div>
+    </div>
+    <div style="border-top:1px solid var(--border);margin:16px 0"></div>
+    <div id="detailRows" style="display:flex;flex-direction:column;gap:10px"></div>
+    <div style="border-top:1px solid var(--border);margin:16px 0"></div>
+    <div id="detailNote" style="font-size:13px;color:var(--text2);font-style:italic;margin-bottom:16px;display:none"></div>
+    <button onclick="deleteFromDetail()" style="width:100%;padding:13px;border-radius:var(--radius);border:1px solid var(--danger);background:none;color:var(--danger);font-family:var(--mono);font-size:14px;cursor:pointer">Eliminar movimiento</button>
   </div>
 </div>
 
@@ -619,9 +645,29 @@ function updateNavMonth() {
   document.getElementById('navMonth').textContent = `${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
 }
 
+// filter state
+let filterMonth = currentMonth();
+
+function changeMonth(dir) {
+  const [y, m] = filterMonth.split('-').map(Number);
+  const d = new Date(y, m - 1 + dir, 1);
+  filterMonth = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+  renderHome();
+}
+
+function updateFilterLabel() {
+  const [y, m] = filterMonth.split('-').map(Number);
+  document.getElementById('filterMonthLabel').textContent = `${MONTHS[m-1].slice(0,3)} ${y}`;
+  const btn = document.getElementById('btnNextMonth');
+  const isCurrentMonth = filterMonth === currentMonth();
+  btn.style.opacity = isCurrentMonth ? '0.3' : '1';
+  btn.style.pointerEvents = isCurrentMonth ? 'none' : 'auto';
+}
+
 // ─── HOME ───────────────────────────────────────────────────
 function renderHome() {
-  const cm = currentMonth();
+  updateFilterLabel();
+  const cm = filterMonth;
   const thisMonth = state.transactions.filter(t => t.fecha.startsWith(cm));
   const incomeTotal = thisMonth.filter(t=>t.tipo==='ingreso').reduce((a,t)=>a+Number(t.monto),0);
   const expenseTotal = thisMonth.filter(t=>t.tipo==='gasto').reduce((a,t)=>a+Number(t.monto),0);
@@ -637,10 +683,10 @@ function renderHome() {
   document.getElementById('subIncome').textContent = `${thisMonth.filter(t=>t.tipo==='ingreso').length} movimiento(s)`;
   document.getElementById('subExpense').textContent = `${thisMonth.filter(t=>t.tipo==='gasto').length} movimiento(s)`;
 
-  const sorted = [...state.transactions].sort((a,b) => b.timestamp - a.timestamp).slice(0,40);
+  const sorted = [...thisMonth].sort((a,b) => b.timestamp - a.timestamp);
   const list = document.getElementById('txnList');
   if (!sorted.length) {
-    list.innerHTML = `<div class="empty-state"><div style="font-size:32px;margin-bottom:8px">○</div><p>Sin movimientos aún.<br>Tocá + para agregar.</p></div>`;
+    list.innerHTML = `<div class="empty-state"><div style="font-size:32px;margin-bottom:8px">○</div><p>Sin movimientos en este mes.</p></div>`;
     return;
   }
   list.innerHTML = sorted.map(t => {
@@ -659,14 +705,63 @@ function renderHome() {
   }).join('');
 }
 
+let detailId = null;
+
 function txnDetail(id) {
   const t = state.transactions.find(x=>x.id===id);
   if (!t) return;
-  if (confirm(`Eliminar: ${t.descripcion} (${fmtMoney(t.monto,t.moneda)})?`)) {
-    state.transactions = state.transactions.filter(x=>x.id!==id);
+  detailId = id;
+  const cat = state.categories.find(c=>c.id===t.categoria);
+  const isIncome = t.tipo === 'ingreso';
+  const freqMap = {mensual:'Mensual fija', eventual:'Eventual', recurrente:'Recurrente variable', ingreso:'Ingreso'};
+  const freqColors = {mensual:'var(--info)', eventual:'var(--text3)', recurrente:'var(--accent)', ingreso:'var(--success)'};
+
+  document.getElementById('detailDesc').textContent = t.descripcion;
+  document.getElementById('detailDesc').style.color = isIncome ? 'var(--success)' : 'var(--accent)';
+
+  const amountEl = document.getElementById('detailAmount');
+  amountEl.textContent = (isIncome?'+':'-') + fmtMoney(t.monto, t.moneda);
+  amountEl.style.color = isIncome ? 'var(--success)' : 'var(--danger)';
+
+  const badges = document.getElementById('detailBadges');
+  const freq = t.frecuencia || 'eventual';
+  badges.innerHTML = `
+    <span style="font-size:10px;padding:3px 8px;border-radius:4px;background:var(--bg3);color:${freqColors[freq]};border:1px solid ${freqColors[freq]}44">${freqMap[freq]||freq}</span>
+    <span style="font-size:10px;padding:3px 8px;border-radius:4px;background:var(--bg3);color:var(--text3)">${t.moneda||'ARS'}</span>
+  `;
+
+  const rows = [
+    ['Fecha', fmtDate(t.fecha)],
+    ['Categoría', cat ? `<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:8px;height:8px;border-radius:50%;background:${cat.color};display:inline-block"></span>${cat.name}</span>` : t.categoria],
+    ['Tipo', t.subcategoria || '—'],
+    ['Tipo movimiento', isIncome ? 'Ingreso' : 'Gasto'],
+  ];
+  document.getElementById('detailRows').innerHTML = rows.map(([k,v]) =>
+    `<div style="display:flex;justify-content:space-between;align-items:center;font-size:13px">
+      <span style="color:var(--text3)">${k}</span>
+      <span style="color:var(--text)">${v}</span>
+    </div>`).join('');
+
+  const noteEl = document.getElementById('detailNote');
+  if (t.nota) { noteEl.textContent = '📝 ' + t.nota; noteEl.style.display = 'block'; }
+  else noteEl.style.display = 'none';
+
+  document.getElementById('detailOverlay').classList.add('open');
+}
+
+function closeDetail() { document.getElementById('detailOverlay').classList.remove('open'); }
+function closeDetailIfOverlay(e) { if (e.target === document.getElementById('detailOverlay')) closeDetail(); }
+
+function deleteFromDetail() {
+  const t = state.transactions.find(x=>x.id===detailId);
+  if (!t) return;
+  if (confirm(`¿Eliminar "${t.descripcion}"?`)) {
+    state.transactions = state.transactions.filter(x=>x.id!==detailId);
     saveState();
+    closeDetail();
     renderHome();
-    syncDelete(id);
+    syncDelete(detailId);
+    detailId = null;
   }
 }
 
@@ -683,7 +778,7 @@ function showChart(type) {
 }
 
 function renderCharts() {
-  const cm = currentMonth();
+  const cm = filterMonth;
   const gastos = state.transactions.filter(t=>t.tipo==='gasto'&&t.fecha.startsWith(cm));
 
   // PIE
@@ -752,7 +847,7 @@ function renderCharts() {
   }
 
   // Breakdown
-  const cm2 = currentMonth();
+  const cm2 = filterMonth;
   const gastosMes = state.transactions.filter(t=>t.tipo==='gasto'&&t.fecha.startsWith(cm2));
   const totalMes = gastosMes.reduce((a,t)=>a+Number(t.monto),0);
   const bycat2 = {};
