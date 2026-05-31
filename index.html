@@ -343,7 +343,7 @@ body{font-family:var(--mono);background:var(--bg);color:var(--text);min-height:1
     <div class="settings-item">
       <div>
         <div class="settings-item-label">Última modificación</div>
-        <div class="settings-item-sub" style="color:var(--accent);letter-spacing:0.5px">31/05/26 — 19:45 hs</div>
+        <div class="settings-item-sub" style="color:var(--accent);letter-spacing:0.5px">01/06/26 — 10:20 hs</div>
       </div>
     </div>
   </div>
@@ -922,58 +922,68 @@ function renderCharts() {
 
   if (currentChartType==='evol') {
     const periods = getPeriods();
-    // últimos 4 períodos hasta el seleccionado
-    const endIdx = filterPeriodIdxChart;
-    const idxs = [endIdx-3, endIdx-2, endIdx-1, endIdx].filter(i=>i>=0);
     const evolEl = document.getElementById('evolList');
-    const fijoTxns = state.transactions.filter(t=>t.tipo==='gasto'&&t.fijo);
-    const seen = {};
-    fijoTxns.forEach(t=>{
-      const k=(t.descripcion+(t.subcategoria||'')).toLowerCase();
-      if(!seen[k]) seen[k]={name:t.descripcion,sub:t.subcategoria||'',byPeriod:{}};
-    });
-    fijoTxns.forEach(t=>{
-      const k=(t.descripcion+(t.subcategoria||'')).toLowerCase();
-      if(!seen[k]) return;
-      // find which period this txn belongs to
-      let pidx = -1;
-      if (periods) {
+
+    if (!periods || periods.length < 1) {
+      evolEl.innerHTML = `<div style="font-size:13px;color:var(--text3);text-align:center;padding:20px">Necesitás al menos un sueldo registrado para ver evolución.</div>`;
+    } else {
+      // Mostrar hasta los últimos 4 períodos hasta el seleccionado (inclusive)
+      const endIdx = Math.min(filterPeriodIdxChart, periods.length - 1);
+      const startIdx = Math.max(0, endIdx - 3);
+      const idxs = [];
+      for (let i = startIdx; i <= endIdx; i++) idxs.push(i);
+
+      const fijoTxns = state.transactions.filter(t=>t.tipo==='gasto'&&t.fijo);
+      const seen = {};
+      fijoTxns.forEach(t=>{
+        const k=(t.descripcion+'|'+(t.subcategoria||'')).toLowerCase();
+        if(!seen[k]) seen[k]={name:t.descripcion,sub:t.subcategoria||'',byPeriod:{}};
+      });
+      fijoTxns.forEach(t=>{
+        const k=(t.descripcion+'|'+(t.subcategoria||'')).toLowerCase();
+        if(!seen[k]) return;
+        let pidx = -1;
         for (let i=0;i<periods.length;i++) {
           if (t.fecha >= periods[i].from && t.fecha <= periods[i].to) { pidx=i; break; }
         }
-      } else { pidx = 0; }
-      seen[k].byPeriod[pidx] = (seen[k].byPeriod[pidx]||0)+Number(t.monto);
-    });
-    const items = Object.values(seen).filter(x=>Object.keys(x.byPeriod).length>0);
-    if (!items.length) {
-      evolEl.innerHTML = `<div style="font-size:13px;color:var(--text3);text-align:center;padding:20px">Marcá gastos como fijo (★) para ver su evolución.</div>`;
-    } else {
-      evolEl.innerHTML = items.map(item=>{
-        const vals = idxs.map(i=>item.byPeriod[i]||null);
-        const lastVal = vals[vals.length-1], prevVal = vals[vals.length-2];
-        let pctStr='';
-        if (lastVal!==null && prevVal!==null && prevVal>0) {
-          const pct=Math.round((lastVal-prevVal)/prevVal*100);
-          const cl=pct>5?'compare-arrow-up':pct<-5?'compare-arrow-down':'compare-flat';
-          const arrow=pct>5?'↑':pct<-5?'↓':'→';
-          pctStr=`<span class="${cl}" style="font-size:12px">${arrow} ${Math.abs(pct)}%</span>`;
-        }
-        const barsHtml = idxs.map((pidx,i)=>{
-          const v=vals[i];
-          const lbl = periods && periods[pidx] ? periods[pidx].label.split(' ')[0].slice(0,3) : `P${pidx+1}`;
-          return `<div style="text-align:center;flex:1">
-            <div style="font-size:9px;color:var(--text3);margin-bottom:4px">${lbl}</div>
-            <div style="font-family:var(--serif);font-size:11px;color:${v?'var(--text)':'var(--text3)'}">${v?'$'+Math.round(v).toLocaleString('es-AR'):'—'}</div>
+        if (pidx >= 0) seen[k].byPeriod[pidx] = (seen[k].byPeriod[pidx]||0)+Number(t.monto);
+      });
+
+      const items = Object.values(seen).filter(x=>Object.keys(x.byPeriod).length>0);
+
+      if (!items.length) {
+        evolEl.innerHTML = `<div style="font-size:13px;color:var(--text3);text-align:center;padding:20px">Marcá gastos como fijo (★) para ver su evolución.</div>`;
+      } else {
+        evolEl.innerHTML = items.map(item=>{
+          const vals = idxs.map(i=>item.byPeriod[i]||null);
+          // comparar último vs penúltimo que tengan valor
+          const withVal = vals.filter(v=>v!==null);
+          const lastVal = withVal[withVal.length-1]||null;
+          const prevVal = withVal[withVal.length-2]||null;
+          let pctStr='';
+          if (lastVal!==null && prevVal!==null && prevVal>0) {
+            const pct=Math.round((lastVal-prevVal)/prevVal*100);
+            const cl=pct>5?'compare-arrow-up':pct<-5?'compare-arrow-down':'compare-flat';
+            const arrow=pct>5?'↑':pct<-5?'↓':'→';
+            pctStr=`<span class="${cl}" style="font-size:13px;font-weight:500">${arrow} ${Math.abs(pct)}%</span>`;
+          }
+          const barsHtml = idxs.map((pidx,i)=>{
+            const v=vals[i];
+            const lbl = periods[pidx] ? periods[pidx].label.split(' ')[0].slice(0,3) : `P${pidx+1}`;
+            return `<div style="text-align:center;flex:1">
+              <div style="font-size:9px;color:var(--text3);margin-bottom:4px;text-transform:uppercase">${lbl}</div>
+              <div style="font-family:var(--serif);font-size:12px;color:${v?'var(--text)':'var(--text3)'}">${v?'$'+Math.round(v).toLocaleString('es-AR'):'—'}</div>
+            </div>`;
+          }).join('');
+          return `<div style="background:var(--bg2);border-radius:var(--radius-sm);padding:12px;margin-bottom:8px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+              <div><div style="font-size:13px">${item.name}</div><div style="font-size:10px;color:var(--text3)">${item.sub}</div></div>
+              ${pctStr}
+            </div>
+            <div style="display:flex;gap:4px">${barsHtml}</div>
           </div>`;
         }).join('');
-        return `<div style="background:var(--bg2);border-radius:var(--radius-sm);padding:12px;margin-bottom:8px">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-            <div><div style="font-size:13px">${item.name}</div><div style="font-size:10px;color:var(--text3)">${item.sub}</div></div>
-            ${pctStr}
-          </div>
-          <div style="display:flex;gap:4px">${barsHtml}</div>
-        </div>`;
-      }).join('');
+      }
     }
   }
 
