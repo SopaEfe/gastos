@@ -795,18 +795,51 @@ function renderFinanzas() {
   const expenses = txns.filter(t=>t.tipo==='gasto');
   const incTotal = incomes.reduce((a,t)=>a+Number(t.monto),0);
   const expTotal = expenses.reduce((a,t)=>a+Number(t.monto),0);
+  const sinIngreso = incTotal === 0;
   const balance = incTotal - expTotal;
-  document.getElementById('finIncome').textContent = fmtMoney(incTotal);
-  document.getElementById('finIncomeSub').textContent = `${incomes.length} ingreso(s)`;
+
+  // Ingresos
+  const incEl = document.getElementById('finIncome');
+  if (sinIngreso) {
+    incEl.textContent = 'sin registrar';
+    incEl.style.fontSize = '16px';
+    incEl.style.color = 'var(--text3)';
+  } else {
+    incEl.textContent = fmtMoney(incTotal);
+    incEl.style.fontSize = '';
+    incEl.style.color = '';
+    incEl.className = 'sum-value income';
+  }
+  document.getElementById('finIncomeSub').textContent = sinIngreso
+    ? 'cargá el sueldo para ver el balance'
+    : `${incomes.length} ingreso${incomes.length!==1?'s':''}`;
+
+  // Gastos
   document.getElementById('finExpense').textContent = fmtMoney(expTotal);
+
+  // Balance
   const balEl = document.getElementById('finBalance');
-  balEl.textContent = (balance<0?'-':'') + fmtMoney(Math.abs(balance));
-  balEl.className = 'sum-value '+(balance>=0?'balance-pos':'balance-neg');
-  const pct = incTotal>0 ? Math.round((expTotal/incTotal)*100) : 0;
-  document.getElementById('finBalancePct').textContent = `${pct}% del ingreso gastado`;
+  const balPctEl = document.getElementById('finBalancePct');
+  if (sinIngreso) {
+    balEl.textContent = '-' + fmtMoney(expTotal);
+    balEl.className = 'sum-value balance-neg';
+    balPctEl.textContent = 'sin ingreso registrado — mostrando gastos como negativo';
+    balPctEl.style.color = 'var(--text3)';
+  } else {
+    balEl.textContent = (balance<0?'-':'') + fmtMoney(Math.abs(balance));
+    balEl.className = 'sum-value '+(balance>=0?'balance-pos':'balance-neg');
+    const pct = Math.round((expTotal/incTotal)*100);
+    balPctEl.textContent = `${pct}% del ingreso gastado`;
+    balPctEl.style.color = '';
+  }
+
+  // Lista ingresos
   const incList = document.getElementById('finIncomeList');
   if (!incomes.length) {
-    incList.innerHTML = `<div style="font-size:13px;color:var(--text3);padding:12px">Sin ingresos registrados este mes.</div>`;
+    incList.innerHTML = `<div style="display:flex;align-items:center;gap:10px;padding:12px;background:var(--bg2);border-radius:var(--radius-sm)">
+      <div style="font-size:20px">💡</div>
+      <div style="font-size:12px;color:var(--text3);line-height:1.5">Tocá + y cargá el sueldo como <strong style="color:var(--text2)">Ingreso → Sueldo</strong> con la fecha en que cobaste para activar el balance.</div>
+    </div>`;
   } else {
     incList.innerHTML = incomes.sort((a,b)=>b.timestamp-a.timestamp).map(t=>
       `<div class="txn-item" onclick="txnDetail('${t.id}')">
