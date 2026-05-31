@@ -383,7 +383,7 @@ body{font-family:var(--mono);background:var(--bg);color:var(--text);min-height:1
     </div>
     <div class="form-row select-group">
       <label class="form-label">tipo de gasto</label>
-      <select class="form-select" id="fSubCat" style="appearance:none;padding-right:28px"></select>
+      <select class="form-select" id="fSubCat" onchange="autoDetectStar()" style="appearance:none;padding-right:28px"></select>
     </div>
     <div class="form-row" id="freqRow">
       <label class="form-label">frecuencia</label>
@@ -1123,6 +1123,23 @@ function updateSubCatOptions(){
   const sel=document.getElementById('fSubCat');
   sel.innerHTML=(cat?cat.subs:[]).map(s=>`<option value="${s}">${s}</option>`).join('');
   if(cat&&!cat.subs.length) sel.innerHTML='<option value="">Sin tipos</option>';
+  autoDetectStar();
+}
+function autoDetectStar(){
+  if(editingId) return; // no tocar si estamos editando
+  const catId=document.getElementById('fCat').value;
+  const subCat=document.getElementById('fSubCat').value;
+  // buscar si existe algún gasto fijo con esta categoria+subcategoria
+  const match = state.transactions.find(t =>
+    t.tipo==='gasto' && t.fijo && t.categoria===catId && (t.subcategoria||'')===(subCat||'')
+  );
+  if(match && !isStar){
+    isStar=true;
+    updateStarUI();
+  } else if(!match && isStar){
+    isStar=false;
+    updateStarUI();
+  }
 }
 function setFreq(btn){
   currentFreq=btn.dataset.freq;
