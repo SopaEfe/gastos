@@ -313,6 +313,7 @@ body{font-family:var(--mono);background:var(--bg);color:var(--text);min-height:1
     <div style="display:flex;gap:8px;margin-top:10px">
       <button class="btn-sm" onclick="testConnection()">Probar</button>
       <button class="btn-sm primary" onclick="syncAll()">Sincronizar</button>
+      <button class="btn-sm" onclick="updateResumen()" style="border-color:var(--info);color:var(--info)">→ Hoja1</button>
     </div>
     <div style="margin-top:12px;font-size:11px;color:var(--text3);line-height:1.7">
       <strong style="color:var(--text2)">Cómo configurar:</strong><br>
@@ -343,7 +344,7 @@ body{font-family:var(--mono);background:var(--bg);color:var(--text);min-height:1
     <div class="settings-item">
       <div>
         <div class="settings-item-label">Última modificación</div>
-        <div class="settings-item-sub" style="color:var(--accent);letter-spacing:0.5px">01/06/26 — 10:20 hs</div>
+        <div class="settings-item-sub" style="color:var(--accent);letter-spacing:0.5px">30/06/26 — 11:40 hs</div>
       </div>
     </div>
   </div>
@@ -453,6 +454,40 @@ function handleRequest(e){
       var data=sheet.getDataRange().getValues();
       for(var i=1;i<data.length;i++){if(data[i][0]==body.id){sheet.deleteRow(i+1);break;}}
       return ContentService.createTextOutput(JSON.stringify({ok:true})).setMimeType(ContentService.MimeType.JSON);
+    }
+    if(action==="updateResumen"){
+      var body=JSON.parse(e.postData.contents);
+      // body.mes = "JUNIO", body.gastos = [{concepto, monto, moneda}]
+      var sheet=ss.getSheetByName("Hoja1");
+      if(!sheet) return ContentService.createTextOutput(JSON.stringify({ok:false,error:"No se encontró Hoja1"})).setMimeType(ContentService.MimeType.JSON);
+      var data=sheet.getDataRange().getValues();
+      // fila 1 = encabezados: col0=categoria, col1=concepto, col2=mes1, col3=mes2...
+      var headers=data[0];
+      // buscar columna del mes
+      var mesCol=-1;
+      for(var c=0;c<headers.length;c++){
+        if(String(headers[c]).toUpperCase()===body.mes.toUpperCase()){mesCol=c;break;}
+      }
+      if(mesCol===-1){
+        // agregar columna nueva al final
+        mesCol=headers.length;
+        sheet.getRange(1,mesCol+1).setValue(body.mes.toUpperCase());
+      }
+      var updated=0;
+      for(var g=0;g<body.gastos.length;g++){
+        var gasto=body.gastos[g];
+        var conceptoNorm=String(gasto.concepto).toLowerCase().trim();
+        for(var r=1;r<data.length;r++){
+          var filaConcepto=String(data[r][1]).toLowerCase().trim();
+          if(filaConcepto===conceptoNorm){
+            var val=gasto.moneda==="USD"?"USD "+gasto.monto:gasto.monto;
+            sheet.getRange(r+1,mesCol+1).setValue(val);
+            updated++;
+            break;
+          }
+        }
+      }
+      return ContentService.createTextOutput(JSON.stringify({ok:true,updated:updated,col:mesCol})).setMimeType(ContentService.MimeType.JSON);
     }
     return ContentService.createTextOutput(JSON.stringify({ok:false,error:"acción desconocida"})).setMimeType(ContentService.MimeType.JSON);
   }catch(err){
@@ -1320,6 +1355,36 @@ function exportJSON(){
 function clearLocal(){
   if(!confirm('¿Borrar todos los datos locales?')) return;
   state.transactions=[];saveState();renderHome();showToast('Datos borrados');
+}
+async function updateResumen(){
+  if(!state.scriptUrl) return showToast('Configurá la URL primero','error');
+  const periods = getPeriods();
+  const curIdx = currentPeriodIdx();
+  const curPeriod = periods && periods[curIdx] ? periods[curIdx] : null;
+  if(!curPeriod) return showToast('No hay período activo','error');
+  // nombre del mes en español mayúsculas para buscar en Hoja1
+  const mesLabel = curPeriod.label.split(' ')[0].toUpperCase(); // ej: JUNIO
+  // juntar gastos fijos del período actual, sumar por subcategoría (concepto)
+  const txns = state.transactions.filter(t =>
+    t.tipo==='gasto' && t.fijo &&
+    t.fecha >= curPeriod.from && t.fecha <= curPeriod.to
+  );
+  // agrupar por subcategoria (que es el "concepto" en Hoja1)
+  const byConcepto = {};
+  txns.forEach(t => {
+    const key = (t.subcategoria||t.descripcion).trim();
+    if(!byConcepto[key]) byConcepto[key] = {concepto:key, monto:0, moneda:t.moneda||'ARS'};
+    byConcepto[key].monto += Number(t.monto);
+  });
+  const gastos = Object.values(byConcepto);
+  if(!gastos.length) return showToast('Sin gastos fijos en el período actual','error');
+  showToast('Actualizando Hoja1…');
+  const data = await apiCall({action:'updateResumen', mes:mesLabel, gastos});
+  if(data && data.ok){
+    showToast(`Hoja1 actualizada — ${data.updated} concepto${data.updated!==1?'s':''} encontrado${data.updated!==1?'s':''}`, 'success');
+  } else {
+    showToast('Error al actualizar Hoja1','error');
+  }
 }
 function copyScript(){navigator.clipboard.writeText(SCRIPT_CODE).then(()=>showToast('Código copiado ✓','success'));}
 
